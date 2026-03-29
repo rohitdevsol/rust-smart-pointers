@@ -28,12 +28,13 @@
 
 use std::ops::Deref;
 use crate::cell::Cell;
+use std::ptr::NonNull;
 struct RcInner<T> {
     value: T,
     refcount: Cell<usize>,
 }
 pub struct Rc<T> {
-    inner: *const RcInner<T>,
+    inner: NonNull<RcInner<T>>,
     // value: T,
     // ref_count: usize
 
@@ -48,13 +49,16 @@ impl<T> Rc<T> {
             refcount: Cell::new(1),
         });
 
-        Rc { inner: Box::into_raw(inner) }
+        /*
+            Box does not give us a null pointer
+         */
+        Rc { inner: unsafe { NonNull::new_unchecked(Box::into_raw(inner)) } }
     }
 }
 
 impl<T> Clone for Rc<T> {
     fn clone(&self) -> Self {
-        let inner = unsafe { &*self.inner };
+        let inner = unsafe { self.inner.as_ref() };
 
         let c = inner.refcount.get();
         inner.refcount.set(c + 1);
@@ -72,6 +76,21 @@ impl<T> Deref for Rc<T> {
             SAFETY: self.inner is a Box that is only deallocated when the last Rc goes away.
             We have an Rc, therefore the Box has not been deallocated, so deref is fine.
         */
-        &(unsafe { &*self.inner }).value
+        &(unsafe { self.inner.as_ref() }).value
+    }
+}
+
+impl<T> Drop for Rc<T> {
+    fn drop(&mut self) {
+        let inner = unsafe { self.inner.as_ref() };
+        let c = inner.refcount.get();
+        if c == 1 {
+            // only rc left, after dropped , no rc and no reference to T(inner value)
+            drop(inner);
+            let _ = unsafe { Box::from_raw(self.inner.as_ptr()) };
+        } else {
+            // there are other rc .. so do not drop the box
+            inner.refcount.set(c - 1);
+        }
     }
 }
